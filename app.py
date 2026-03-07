@@ -17,7 +17,19 @@ FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 # -------------------------
 # Initialize Vertex AI
 # -------------------------
-vertexai.init(project=PROJECT_ID, location=LOCATION)
+from google.oauth2 import service_account
+
+credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+
+credentials = service_account.Credentials.from_service_account_info(
+    json.loads(credentials_json)
+)
+
+vertexai.init(
+    project=PROJECT_ID,
+    location=LOCATION,
+    credentials=credentials
+)
 
 # Friend-like system prompt
 SYSTEM_PROMPT = """
@@ -325,5 +337,6 @@ def chat():
 if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 5000))
+
 
     app.run(host="0.0.0.0", port=port)
