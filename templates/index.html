@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HappyMind AI</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+
+<!-- Floating Emoji Background -->
+<div class="emoji-background" id="emoji-bg"></div>
+
+<div class="container">
+    <div class="card">
+
+        <div class="header">
+            <img src="/static/images/bot.png" class="header-avatar">
+            <div>
+                <h2>HappyMind AI</h2>
+                <span>Online</span>
+            </div>
+        </div>
+
+        <div class="chat" id="chat"></div>
+
+        <div class="suggestions">
+            <button onclick="quickSuggest('suggest_movies')">🎬 Movies</button>
+            <button onclick="quickSuggest('suggest_music')">🎧 Music</button>
+            <button onclick="quickSuggest('suggest_relax')">🧘 Relax</button>
+        </div>
+
+        <div class="input-bar">
+            <input id="input" placeholder="Type your message..." autocomplete="off">
+            <button onclick="send()">➤</button>
+        </div>
+
+    </div>
+</div>
+
+<script src="/static/js/script.js"></script>
+</body>
+</html>
