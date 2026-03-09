@@ -4,6 +4,7 @@ from flask import Flask, render_template, request, jsonify, session
 from dotenv import load_dotenv
 import vertexai
 from vertexai.generative_models import GenerativeModel
+from google.oauth2 import service_account
 
 # -------------------------
 # Load environment variables
@@ -15,10 +16,8 @@ LOCATION = "us-central1"
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 
 # -------------------------
-# Initialize Vertex AI
+# Vertex AI Authentication (for deployment)
 # -------------------------
-from google.oauth2 import service_account
-
 credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 
 credentials = service_account.Credentials.from_service_account_info(
@@ -31,40 +30,27 @@ vertexai.init(
     credentials=credentials
 )
 
-# Friend-like system prompt
+# -------------------------
+# System Prompt
+# -------------------------
 SYSTEM_PROMPT = """
 You are HappyMind.
 
 You are NOT an AI assistant.
 You are a calm, supportive human friend having a conversation.
 
-Your personality:
+Personality:
 - warm
 - emotionally intelligent
 - patient
-- never preachy
-
-How you speak:
-- casual natural sentences
-- like texting a friend
-- short replies
-- empathetic
-
-Examples of tone:
-
-User: I feel really sad today.
-Good response:
-"I'm really sorry you're feeling that way. Want to tell me what happened?"
-
-User: I'm angry.
-Good response:
-"Yeah that sounds really frustrating. What happened?"
+- casual tone
 
 Rules:
-- Never lecture
-- Never sound like a therapist
-- Never say "As an AI"
-- Keep replies 2–4 sentences
+- never lecture
+- never say "as an AI"
+- never sound like a therapist
+- speak like a real friend
+- responses should be 2–4 sentences
 """
 
 model = GenerativeModel(
@@ -78,14 +64,13 @@ model = GenerativeModel(
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 
-# -------------------------
-# Crisis Detection
-# -------------------------
-def is_crisis(text):
 
-    text = text.lower()
+# -------------------------
+# SAFETY LAYER
+# -------------------------
+def detect_self_harm(text):
 
-    crisis_keywords = [
+    patterns = [
         "suicide",
         "kill myself",
         "end my life",
@@ -94,195 +79,161 @@ def is_crisis(text):
         "i want to die"
     ]
 
-    return any(word in text for word in crisis_keywords)
+    return any(p in text.lower() for p in patterns)
 
 
-def crisis_response():
+def detect_violence(text):
+
+    patterns = [
+        "i killed",
+        "i murdered",
+        "i stabbed",
+        "i shot someone",
+        "i hurt someone"
+    ]
+
+    return any(p in text.lower() for p in patterns)
+
+
+def self_harm_response():
 
     return (
-        "I'm really glad you shared that with me. "
-        "If you're feeling like harming yourself, please reach out to someone right now. "
-        "If you're in India you can call the Kiran Mental Health Helpline at 1800-599-0019. "
-        "You don't have to go through this alone."
+        "I'm really glad you told me. If you're feeling like harming yourself, "
+        "please reach out to someone right now. If you're in India you can call "
+        "the Kiran Mental Health Helpline at 1800-599-0019. You don't have to go through this alone."
     )
 
+
+def violence_response():
+
+    return (
+        "That sounds like a very serious situation. I can't help with anything related to harming someone. "
+        "The best step would be to contact local authorities or emergency services."
+    )
+
+
 # -------------------------
-# Detect suggestion request
+# EMOTION DETECTION
 # -------------------------
-def wants_suggestions(text):
+def detect_emotion(text):
 
     text = text.lower()
 
-    triggers = [
-        "suggest",
-        "recommend",
-        "what should i watch",
-        "any movie",
-        "movie suggestion",
-        "suggest movie",
-        "suggest movies",
-        "suggest music"
+    if any(w in text for w in ["sad", "depressed", "lonely", "hurt"]):
+        return "sadness"
+
+    if any(w in text for w in ["angry", "mad", "furious"]):
+        return "anger"
+
+    if any(w in text for w in ["stress", "overwhelmed", "pressure"]):
+        return "stress"
+
+    if any(w in text for w in ["anxious", "worried", "panic"]):
+        return "anxiety"
+
+    if any(w in text for w in ["happy", "great", "excited"]):
+        return "happiness"
+
+    return "neutral"
+
+
+# -------------------------
+# SIMPLE INTENT DETECTION
+# -------------------------
+def detect_intent(text):
+
+    text = text.lower()
+
+    if "quote" in text or "motivation" in text:
+        return "quotes"
+
+    if "music" in text or "song" in text:
+        return "music"
+
+    if "suggest" in text or "recommend" in text:
+        return "suggestion"
+
+    return "chat"
+
+
+# -------------------------
+# SIMPLE CONTENT RESPONSES
+# -------------------------
+def motivational_quotes():
+
+    quotes = [
+        "The only way to do great work is to love what you do. – Steve Jobs",
+        "Believe you can and you're halfway there. – Theodore Roosevelt",
+        "Success is not final, failure is not fatal: it is the courage to continue that counts. – Winston Churchill"
     ]
 
-    return any(trigger in text for trigger in triggers)
+    return "Here are a few motivational quotes I like: " + " | ".join(quotes)
+
+
+def music_suggestions():
+
+    return (
+        "You might like some lo-fi beats, soft piano music, or ambient soundscapes. "
+        "Artists like Ludovico Einaudi are great for relaxing."
+    )
+
 
 # -------------------------
-# Gemini Suggestions
+# CONTEXT BUILDER
 # -------------------------
-def gemini_suggestions(user_message, history):
+def build_context(history):
 
-    conversation = ""
+    context = ""
 
-    for msg in history[-8:]:
-        role = msg["role"]
-        content = msg["content"]
+    for msg in history[-10:]:
 
-        if role == "user":
-            conversation += f"User: {content}\n"
+        if msg["role"] == "user":
+            context += f"User: {msg['content']}\n"
+
         else:
-            conversation += f"Friend: {content}\n"
-    prompt = f"""
-Conversation history:
-{conversation}
+            context += f"Friend: {msg['content']}\n"
 
-User request:
-{user_message}
+    return context
 
-Your job is to recommend movies, music, or relaxing activities depending on the user's mood.
-
-Decision rules:
-
-1. If the user already gave a preference
-   (example: comedy, action, relaxing),
-   immediately give 3 suggestions.
-
-2. Only ask ONE clarification question if the user gave no preference.
-
-3. If the user says things like
-   "just suggest", "anything", "now"
-   → immediately give suggestions.
-
-4. Never ask more than one question.
-
-Response style:
-- 2 to 3 sentences
-- natural friendly tone
-- no bullet points
-"""
-
-    response = model.generate_content(prompt)
-
-    return response.text
 
 # -------------------------
-# Gemini Emotional Response
+# Gemini Response
 # -------------------------
-def gemini_response(user_message, history):
+def gemini_response(user_message, history, emotion):
 
-    conversation = ""
-
-    for msg in history[-8:]:
-        role = msg["role"]
-        content = msg["content"]
-
-        if role == "user":
-            conversation += f"User: {content}\n"
-        else:
-            conversation += f"Friend: {content}\n"
-
-    prompt = f"""
-You are HappyMind, a caring and emotionally intelligent friend.
-
-Below is the real conversation history. Only use information that actually appears here.
-
-Conversation history:
-{conversation}
-
-Respond to the latest user message in the conversation.
-
-Your task:
-- Understand how the user feels from their message.
-- Respond with empathy.
-- Ask one gentle follow-up question.
-
-Important rules:
-- Do NOT invent events that the user did not mention.
-- Do NOT assume details.
-- If something is unclear, ask the user instead.
-
-Style rules:
-- Talk like a human friend
-- Be warm and curious
-- Keep responses 2-3 sentences
-- Avoid lectures or psychological explanations
-
-If the user is overwhelmed, stressed, or stuck,
-offer one small practical suggestion instead of only asking questions.
-
-If the user expresses anger or strong emotions,
-acknowledge the feeling and gently encourage calm reflection
-before reacting.
-
-If the user is struggling emotionally (sadness, anger, stress, breakup, anxiety),
-offer 2–3 gentle coping ideas that might help them manage the feeling.
-
-Examples of coping ideas:
-- talking to a trusted person
-- going for a short walk
-- writing thoughts in a journal
-- breathing exercises
-- taking a break from the stressful situation
-
-Sometimes you may reference well-known psychologists, philosophers,
-or mental health ideas if it feels natural.
-
-Avoid vague advice like "try to relax".
-Give concrete, simple suggestions instead.
-"""
-
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-
-    except Exception as e:
-        print("Gemini error:", e)
-        return "I'm here with you. Something went wrong on my side."
-    
-def detect_intent(user_message, history):
-
-    conversation = ""
-
-    for msg in history[-6:]:
-        role = msg["role"]
-        content = msg["content"]
-
-        if role == "user":
-            conversation += f"User: {content}\n"
-        else:
-            conversation += f"Friend: {content}\n"
+    context = build_context(history)
 
     prompt = f"""
 Conversation history:
-{conversation}
+{context}
 
 User message:
 {user_message}
 
-Classify the user's intent into ONE of these categories:
+Detected emotion: {emotion}
 
-1. emotional_talk
-2. suggestion_request
-3. casual_chat
+Respond like a real supportive friend.
 
-Only return the category name.
+Guidelines:
+- understand the user's situation
+- be natural and empathetic
+- give helpful advice if needed
+- do NOT ask a question every time
+- keep responses 2-3 sentences
 """
 
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip().lower()
 
-    except:
-        return "emotional_talk"
+        response = model.generate_content(prompt)
+
+        return response.text
+
+    except Exception as e:
+
+        print("Gemini error:", e)
+
+        return "I'm here with you. Something went wrong on my side."
+
 
 # -------------------------
 # Routes
@@ -293,6 +244,7 @@ def home():
     session.pop("history", None)
 
     return render_template("index.html")
+
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -306,21 +258,32 @@ def chat():
         "content": user_message
     })
 
-    if is_crisis(user_message):
+    # SAFETY CHECKS
 
-        final_reply = crisis_response()
+    if detect_self_harm(user_message):
+
+        final_reply = self_harm_response()
+
+    elif detect_violence(user_message):
+
+        final_reply = violence_response()
 
     else:
 
-       intent = detect_intent(user_message, history)
+        intent = detect_intent(user_message)
+        emotion = detect_emotion(user_message)
 
-       if intent == "suggestion_request":
+        if intent == "quotes":
 
-        final_reply = gemini_suggestions(user_message, history)
+            final_reply = motivational_quotes()
 
-       else:
+        elif intent == "music":
 
-        final_reply = gemini_response(user_message, history)
+            final_reply = music_suggestions()
+
+        else:
+
+            final_reply = gemini_response(user_message, history, emotion)
 
     history.append({
         "role": "bot",
@@ -331,12 +294,12 @@ def chat():
 
     return jsonify({"reply": final_reply})
 
+
 # -------------------------
 # Run App
 # -------------------------
 if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 5000))
-
 
     app.run(host="0.0.0.0", port=port)
